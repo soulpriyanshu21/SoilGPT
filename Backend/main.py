@@ -1,11 +1,3 @@
-"""
-SoilGPT Backend
-- GET /analyze?location=<pincode_or_place>
-- Geocodes location → coordinates (works for all of India)
-- Fetches live soil moisture + temperature from Open-Meteo
-- Returns JSON
-"""
-
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 import requests
@@ -20,239 +12,494 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ------------------------------------------------------------
-# GEOCODING (PIN code + place name, works anywhere in India)
-# ------------------------------------------------------------
+# ============================================================
+# REGIONAL SOIL REFERENCE
+# ============================================================
 
-def geocode_pincode_india(pincode: str):
-    """Use the free Zippopotam API to get coordinates from an Indian PIN code."""
-    try:
-        url = f"https://api.zippopotam.us/in/{pincode}"
-        r = requests.get(url, timeout=8)
-        if r.status_code == 200:
-            data = r.json()
-            place = data["places"][0]
-            return {
-                "lat": float(place["latitude"]),
-                "lon": float(place["longitude"]),
-                "location": f"{place['place name']}, {place['state']}",
-                "pincode": pincode,
-            }
-    except Exception as e:
-        print(f"Zippopotam error: {e}")
-    return None
-
-
-def geocode_place_nominatim(place: str):
-    """Use Nominatim (OpenStreetMap) to geocode a place name anywhere in India."""
-    try:
-        url = "https://nominatim.openstreetmap.org/search"
-        params = {
-            "q": place,
-            "format": "json",
-            "limit": 1,
-            "countrycodes": "in",
-        }
-        headers = {"User-Agent": "SoilGPT/1.0 (educational project)"}
-        r = requests.get(url, params=params, headers=headers, timeout=10)
-        if r.status_code == 200:
-            data = r.json()
-            if data:
-                result = data[0]
-                display = result["display_name"]
-                parts = [p.strip() for p in display.split(",")]
-                location = parts[0] if parts else place
-                if len(parts) >= 2:
-                    location = f"{parts[0]}, {parts[-1]}"
-                return {
-                    "lat": float(result["lat"]),
-                    "lon": float(result["lon"]),
-                    "location": location,
-                    "pincode": None,
-                }
-    except Exception as e:
-        print(f"Nominatim error: {e}")
-    return None
-
-
-def geocode(location: str):
-    """Try PIN code first, then place name."""
-    location = location.strip()
-    if re.fullmatch(r"\d{6}", location):
-        result = geocode_pincode_india(location)
-        if result:
-            return result
-    result = geocode_place_nominatim(location)
-    if result:
-        return result
-    return None
-
-
-# ------------------------------------------------------------
-# LIVE SOIL DATA (Open-Meteo — free, no API key, works globally)
-# ------------------------------------------------------------
-
-def fetch_openmeteo(lat: float, lon: float):
-    """
-    Fetch live soil moisture + soil temperature from Open-Meteo.
-    Docs: https://open-meteo.com/en/docs
-    """
-    url = "https://api.open-meteo.com/v1/forecast"
-    params = {
-        "latitude": lat,
-        "longitude": lon,
-        "hourly": "soil_moisture_0_to_1cm,soil_moisture_1_to_3cm,soil_temperature_0cm,soil_temperature_6cm",
-        "forecast_days": 1,
-        "timezone": "auto",
-    }
-    try:
-        r = requests.get(url, params=params, timeout=15)
-        print(f"[Open-Meteo] status={r.status_code}")
-        r.raise_for_status()
-        return r.json()
-    except Exception as e:
-        print(f"[Open-Meteo] error: {e}")
-        return None
-
-
-def parse_openmeteo(raw):
-    """Extract the most recent soil moisture + temperature readings."""
-    out = {}
-
-    if not raw or "hourly" not in raw:
-        return out
-
-    hourly = raw["hourly"]
-    times = hourly.get("time", [])
-
-    def last_valid(key):
-        vals = hourly.get(key, [])
-        # Return most recent non-null value
-        for v in reversed(vals):
-            if v is not None:
-                return v
-        return None
-
-    out["soil_moisture_0_1cm"] = last_valid("soil_moisture_0_to_1cm")
-    out["soil_moisture_1_3cm"] = last_valid("soil_moisture_1_to_3cm")
-    out["soil_temperature_0cm"] = last_valid("soil_temperature_0cm")
-    out["soil_temperature_6cm"] = last_valid("soil_temperature_6cm")
-
-    if times:
-        out["reading_time"] = times[-1]
-
-    return out
-
-
-# ------------------------------------------------------------
-# LOCAL SOIL REFERENCE DATA (region-based, from ICAR / Soil Health Card)
-# Used to supplement live data with chemical properties.
-# ------------------------------------------------------------
-
-# Reference: ICAR-NBSS&LUP soil surveys + Government of India Soil Health Card
-# Keyed by Indian state. Falls back to "default" if state not found.
 SOIL_REFERENCE = {
     "gujarat": {
         "soil_type": "Deep Black Cotton Soil (Vertisols)",
-        "ph_range": "7.1 – 8.9 (neutral to slightly alkaline)",
-        "organic_carbon": "Low to medium (0.08% – 0.86%)",
-        "nitrogen": "Low to medium (125 – 323 kg/ha)",
-        "phosphorus": "Medium to high (irrigated), Low (rainfed)",
+        "ph_range": "7.1–8.9",
+        "organic_carbon": "Low to medium (0.08%–0.86%)",
+        "nitrogen": "Low to medium (125–323 kg/ha)",
+        "phosphorus": "Medium to high (irrigated), low (rainfed)",
         "potassium": "High to very high",
         "deficiencies": "Zinc (Zn), Sulphur (S)",
-        "recommendation": "Add organic matter (FYM, compost). Supplement with Zinc and Sulphur. Maintain balanced NPK."
+        "recommendation": "Add organic matter, compost and balanced NPK. Supplement zinc and sulphur when soil testing indicates a deficiency."
     },
     "maharashtra": {
-        "soil_type": "Black cotton soil + Laterite (Konkan)",
-        "ph_range": "6.5 – 8.2 (neutral to slightly alkaline)",
-        "organic_carbon": "Low to medium (0.2% – 0.75%)",
+        "soil_type": "Black cotton soil and laterite (Konkan)",
+        "ph_range": "6.5–8.2",
+        "organic_carbon": "Low to medium (0.2%–0.75%)",
         "nitrogen": "Low to medium",
         "phosphorus": "Low to medium",
         "potassium": "Medium to high",
-        "deficiencies": "Zinc, Boron, Iron (in laterite)",
-        "recommendation": "Use organic compost. Foliar spray of micronutrients. Balanced fertilizer."
+        "deficiencies": "Zinc, Boron, Iron in lateritic soils",
+        "recommendation": "Use organic compost, balanced fertilizer and micronutrients based on soil testing."
     },
     "punjab": {
         "soil_type": "Alluvial soil (Indo-Gangetic plain)",
-        "ph_range": "7.5 – 8.5 (slightly alkaline)",
-        "organic_carbon": "Low (0.15% – 0.5%)",
+        "ph_range": "7.5–8.5",
+        "organic_carbon": "Low (0.15%–0.5%)",
         "nitrogen": "Medium",
         "phosphorus": "Medium to high",
         "potassium": "Medium",
         "deficiencies": "Zinc, Iron, Manganese",
-        "recommendation": "Green manuring recommended. Add Zinc sulphate. Avoid over-irrigation."
+        "recommendation": "Consider green manuring, zinc sulphate where indicated and appropriate irrigation management."
+    },
+    "haryana": {
+        "soil_type": "Alluvial soil (semi-arid)",
+        "ph_range": "7.5–8.5",
+        "organic_carbon": "Low",
+        "nitrogen": "Low to medium",
+        "phosphorus": "Medium",
+        "potassium": "Medium",
+        "deficiencies": "Zinc, Iron",
+        "recommendation": "Add organic matter and use balanced NPK. Apply micronutrients according to soil-test results."
     },
     "uttarakhand": {
-        "soil_type": "Brown forest soil + Podzolic (hills)",
-        "ph_range": "5.5 – 7.0 (slightly acidic to neutral)",
-        "organic_carbon": "Medium to high (0.5% – 1.5%)",
+        "soil_type": "Brown forest soil and podzolic soil in hill regions",
+        "ph_range": "5.5–7.0",
+        "organic_carbon": "Medium to high (0.5%–1.5%)",
         "nitrogen": "Medium to high",
         "phosphorus": "Low to medium",
         "potassium": "Medium",
         "deficiencies": "Phosphorus, Boron",
-        "recommendation": "Add lime if acidic. Supplement phosphorus. Terrace farming friendly."
+        "recommendation": "Use suitable organic matter and address acidity or nutrient deficiencies based on soil testing."
     },
-    "default": {
-        "soil_type": "Mixed — varies by region",
-        "ph_range": "6.0 – 8.0 (typical Indian range)",
+    "uttar pradesh": {
+        "soil_type": "Alluvial soil (Gangetic plain)",
+        "ph_range": "7.0–8.5",
         "organic_carbon": "Low to medium",
         "nitrogen": "Low to medium",
         "phosphorus": "Low to medium",
         "potassium": "Medium",
-        "deficiencies": "Micronutrients (Zn, B, Fe) commonly deficient",
-        "recommendation": "Conduct a soil test for precise recommendations. Add organic matter regularly."
+        "deficiencies": "Zinc, Sulphur",
+        "recommendation": "Consider green manuring, balanced NPK and regular soil testing."
+    },
+    "karnataka": {
+        "soil_type": "Red soil and black soil (Deccan)",
+        "ph_range": "6.0–8.0",
+        "organic_carbon": "Low to medium",
+        "nitrogen": "Low to medium",
+        "phosphorus": "Low to medium",
+        "potassium": "Medium to high",
+        "deficiencies": "Zinc, Boron",
+        "recommendation": "Use organic manure, crop rotation and micronutrients when indicated by soil testing."
+    },
+    "tamil nadu": {
+        "soil_type": "Red loam and coastal alluvial soil",
+        "ph_range": "6.5–8.5",
+        "organic_carbon": "Low to medium",
+        "nitrogen": "Low to medium",
+        "phosphorus": "Low to medium",
+        "potassium": "Medium to high",
+        "deficiencies": "Zinc, Iron",
+        "recommendation": "Use balanced fertilizer and organic matter, with micronutrients guided by soil testing."
+    },
+    "rajasthan": {
+        "soil_type": "Sandy and arid soil",
+        "ph_range": "7.5–9.0",
+        "organic_carbon": "Very low",
+        "nitrogen": "Low",
+        "phosphorus": "Low",
+        "potassium": "Medium to high",
+        "deficiencies": "Organic matter, Zinc, Iron",
+        "recommendation": "Improve organic matter and irrigation efficiency. Soil amendments should be based on testing."
+    },
+    "delhi": {
+        "soil_type": "Alluvial soil (Yamuna plain)",
+        "ph_range": "7.0–8.5",
+        "organic_carbon": "Low",
+        "nitrogen": "Low to medium",
+        "phosphorus": "Low to medium",
+        "potassium": "Medium",
+        "deficiencies": "Organic matter, Zinc",
+        "recommendation": "Add suitable compost and avoid excessive fertilizer. Conduct regular soil testing."
+    },
+    "west bengal": {
+        "soil_type": "Alluvial and deltaic soil",
+        "ph_range": "5.5–7.5",
+        "organic_carbon": "Medium",
+        "nitrogen": "Medium",
+        "phosphorus": "Low to medium",
+        "potassium": "Medium",
+        "deficiencies": "Zinc, Boron",
+        "recommendation": "Maintain organic matter and use balanced fertilizer according to soil-test results."
+    },
+    "kerala": {
+        "soil_type": "Laterite and coastal alluvial soil",
+        "ph_range": "5.0–6.5",
+        "organic_carbon": "Medium to high",
+        "nitrogen": "Medium",
+        "phosphorus": "Low",
+        "potassium": "Medium",
+        "deficiencies": "Phosphorus, Calcium, Magnesium",
+        "recommendation": "Check soil acidity and nutrient levels before applying lime or other amendments."
+    },
+    "default": {
+        "soil_type": "Mixed soil types; varies by region",
+        "ph_range": "6.0–8.0 (typical reference range)",
+        "organic_carbon": "Low to medium",
+        "nitrogen": "Low to medium",
+        "phosphorus": "Low to medium",
+        "potassium": "Medium",
+        "deficiencies": "Micronutrients such as Zn, B and Fe may be deficient",
+        "recommendation": "Conduct a laboratory soil test for location-specific nutrient and fertilizer recommendations."
     }
 }
 
 
 def get_soil_reference(state: str):
-    """Return reference soil data for the given state."""
     if not state:
         return SOIL_REFERENCE["default"]
-    state_lower = state.lower()
-    for key in SOIL_REFERENCE:
-        if key in state_lower or state_lower in key:
-            return SOIL_REFERENCE[key]
+
+    state_lower = state.lower().strip()
+
+    for key, value in SOIL_REFERENCE.items():
+        if key != "default" and (
+            key in state_lower or state_lower in key
+        ):
+            return value
+
     return SOIL_REFERENCE["default"]
 
 
-# ------------------------------------------------------------
-# ENDPOINTS
-# ------------------------------------------------------------
+# ============================================================
+# GEOCODING: OPEN-METEO
+# ============================================================
+
+def geocode_openmeteo(place: str):
+    try:
+        url = "https://geocoding-api.open-meteo.com/v1/search"
+
+        params = {
+            "name": place,
+            "count": 1,
+            "language": "en",
+            "format": "json",
+            "countryCode": "IN",
+        }
+
+        response = requests.get(url, params=params, timeout=10)
+        response.raise_for_status()
+
+        results = response.json().get("results", [])
+
+        if not results:
+            return None
+
+        result = results[0]
+        name = result.get("name", "")
+        state = result.get("admin1", "")
+
+        location = ", ".join(
+            part for part in [name, state] if part and part != name
+        )
+
+        if not location:
+            location = name
+
+        return {
+            "lat": float(result["latitude"]),
+            "lon": float(result["longitude"]),
+            "location": location,
+            "pincode": None,
+        }
+
+    except Exception as error:
+        print(f"[Open-Meteo geocoding] {error}")
+        return None
+
+
+# ============================================================
+# GEOCODING: INDIAN PIN CODES
+# ============================================================
+
+def geocode_pincode(pincode: str):
+    post_office_name = ""
+    district_name = ""
+    state_name = ""
+
+    # First: retrieve post office, district and state.
+    try:
+        response = requests.get(
+            f"https://api.postalpincode.in/pincode/{pincode}",
+            timeout=8,
+        )
+        response.raise_for_status()
+
+        data = response.json()
+
+        if data and data[0].get("Status") == "Success":
+            offices = data[0].get("PostOffice") or []
+
+            if offices:
+                office = offices[0]
+                post_office_name = (office.get("Name") or "").strip()
+                district_name = (office.get("District") or "").strip()
+                state_name = (office.get("State") or "").strip()
+
+    except Exception as error:
+        print(f"[Postal lookup] {error}")
+
+    # Second: retrieve approximate coordinates.
+    latitude = None
+    longitude = None
+    zippo_name = ""
+
+    try:
+        response = requests.get(
+            f"https://api.zippopotam.us/in/{pincode}",
+            timeout=8,
+        )
+
+        if response.status_code == 200:
+            data = response.json()
+            places = data.get("places", [])
+
+            if places:
+                place = places[0]
+                latitude = float(place["latitude"])
+                longitude = float(place["longitude"])
+                zippo_name = place.get("place name", "")
+
+                if not state_name:
+                    state_name = place.get("state", "")
+
+    except Exception as error:
+        print(f"[Zippopotam lookup] {error}")
+
+    # Third: use the district's coordinates if necessary.
+    if latitude is None and district_name:
+        geo = geocode_openmeteo(district_name)
+
+        if geo:
+            latitude = geo["lat"]
+            longitude = geo["lon"]
+
+    if latitude is None or longitude is None:
+        geo = geocode_openmeteo(pincode)
+
+        if geo:
+            latitude = geo["lat"]
+            longitude = geo["lon"]
+
+    if latitude is None or longitude is None:
+        return None
+
+    # Prefer the post office name when available.
+    if post_office_name and district_name and state_name:
+        location_name = (
+            f"{post_office_name}, {district_name}, {state_name}"
+        )
+    elif post_office_name and state_name:
+        location_name = f"{post_office_name}, {state_name}"
+    elif district_name and state_name:
+        location_name = f"{district_name}, {state_name}"
+    elif zippo_name and state_name:
+        location_name = f"{zippo_name}, {state_name}"
+    elif zippo_name:
+        location_name = zippo_name
+    else:
+        location_name = f"PIN {pincode}"
+
+    return {
+        "lat": latitude,
+        "lon": longitude,
+        "location": location_name,
+        "pincode": pincode,
+    }
+
+
+# ============================================================
+# GEOCODING: NOMINATIM FALLBACK
+# ============================================================
+
+def geocode_nominatim(place: str):
+    try:
+        response = requests.get(
+            "https://nominatim.openstreetmap.org/search",
+            params={
+                "q": place,
+                "format": "json",
+                "limit": 1,
+                "countrycodes": "in",
+            },
+            headers={
+                "User-Agent": "SoilGPT/1.0 (educational project)"
+            },
+            timeout=10,
+        )
+
+        response.raise_for_status()
+        results = response.json()
+
+        if not results:
+            return None
+
+        result = results[0]
+        parts = [
+            part.strip()
+            for part in result["display_name"].split(",")
+        ]
+
+        location_name = ", ".join(parts[:2])
+
+        return {
+            "lat": float(result["lat"]),
+            "lon": float(result["lon"]),
+            "location": location_name,
+            "pincode": None,
+        }
+
+    except Exception as error:
+        print(f"[Nominatim geocoding] {error}")
+        return None
+
+
+# ============================================================
+# MASTER GEOCODING FUNCTION
+# ============================================================
+
+def geocode(location: str):
+    location = location.strip()
+
+    if re.fullmatch(r"\d{6}", location):
+        result = geocode_pincode(location)
+
+        if result:
+            return result
+
+    result = geocode_openmeteo(location)
+
+    if result:
+        return result
+
+    return geocode_nominatim(location)
+
+
+# ============================================================
+# LIVE SOIL DATA: OPEN-METEO
+# ============================================================
+
+def fetch_openmeteo_soil(latitude: float, longitude: float):
+    try:
+        response = requests.get(
+            "https://api.open-meteo.com/v1/forecast",
+            params={
+                "latitude": latitude,
+                "longitude": longitude,
+                "hourly": (
+                    "soil_moisture_0_to_1cm,"
+                    "soil_moisture_1_to_3cm,"
+                    "soil_temperature_0cm,"
+                    "soil_temperature_6cm"
+                ),
+                "forecast_days": 1,
+                "timezone": "auto",
+            },
+            timeout=15,
+        )
+
+        response.raise_for_status()
+        return response.json()
+
+    except Exception as error:
+        print(f"[Open-Meteo soil data] {error}")
+        return None
+
+
+def parse_openmeteo_soil(raw):
+    output = {}
+
+    if not raw or "hourly" not in raw:
+        return output
+
+    hourly = raw["hourly"]
+    times = hourly.get("time", [])
+
+    def last_valid(key):
+        values = hourly.get(key, [])
+
+        for value in reversed(values):
+            if value is not None:
+                return value
+
+        return None
+
+    output["soil_moisture_0_1cm"] = last_valid(
+        "soil_moisture_0_to_1cm"
+    )
+    output["soil_moisture_1_3cm"] = last_valid(
+        "soil_moisture_1_to_3cm"
+    )
+    output["soil_temperature_0cm"] = last_valid(
+        "soil_temperature_0cm"
+    )
+    output["soil_temperature_6cm"] = last_valid(
+        "soil_temperature_6cm"
+    )
+
+    if times:
+        output["reading_time"] = times[-1]
+
+    return output
+
+
+# ============================================================
+# API ENDPOINTS
+# ============================================================
 
 @app.get("/")
 def root():
-    return {"status": "ok", "service": "SoilGPT API"}
+    return {
+        "status": "ok",
+        "service": "SoilGPT API",
+    }
 
 
-@app.get("/debug/soilgrids")
-def debug_soilgrids(lat: float = 20.0, lon: float = 73.78):
-    """Debug: raw Open-Meteo response (name kept for compatibility)."""
-    return fetch_openmeteo(lat, lon)
-
-
-@app.get("/analyze")
-def analyze(location: str = Query(..., min_length=2)):
-    # 1. Geocode the input
+# Use this endpoint to get a location name without soil analysis.
+@app.get("/geocode")
+def geocode_endpoint(
+    location: str = Query(..., min_length=2)
+):
     geo = geocode(location)
+
     if not geo:
         raise HTTPException(
             status_code=404,
             detail=f"Could not find location: {location}",
         )
 
-    # 2. Fetch live soil data from Open-Meteo
-    raw = fetch_openmeteo(geo["lat"], geo["lon"])
-    if not raw:
+    return {
+        "location": geo["location"],
+        "pincode": geo["pincode"],
+        "lat": geo["lat"],
+        "lon": geo["lon"],
+    }
+
+
+# Main soil analysis endpoint.
+@app.get("/analyze")
+def analyze(location: str = Query(..., min_length=2)):
+    geo = geocode(location)
+
+    if not geo:
         raise HTTPException(
-            status_code=502,
-            detail="Could not fetch live soil data",
+            status_code=404,
+            detail=f"Could not find location: {location}",
         )
 
-    live = parse_openmeteo(raw)
+    raw = fetch_openmeteo_soil(geo["lat"], geo["lon"])
+    live = parse_openmeteo_soil(raw) if raw else {}
 
-    # 3. Get reference chemical data based on state
-    state = geo["location"].split(",")[-1].strip() if "," in geo["location"] else ""
+    # Extract the state from the returned location.
+    state = ""
+
+    if geo["location"] and "," in geo["location"]:
+        state = geo["location"].split(",")[-1].strip()
+
     reference = get_soil_reference(state)
 
     return {
@@ -265,10 +512,15 @@ def analyze(location: str = Query(..., min_length=2)):
     }
 
 
-# ------------------------------------------------------------
-# RUN
-# ------------------------------------------------------------
+# ============================================================
+# START SERVER
+# ============================================================
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+
+    uvicorn.run(
+        app,
+        host="0.0.0.0",
+        port=8000,
+    )
