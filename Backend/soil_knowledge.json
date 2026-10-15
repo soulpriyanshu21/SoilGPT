@@ -1,0 +1,102 @@
+[
+  {
+    "topic": "soil pH",
+    "text": "Soil pH measures acidity or alkalinity. Most crops grow well between pH 6 and 7.5. Values below 5.5 indicate strong acidity; above 8.5 indicate alkalinity. Adjust with lime (raise pH) or sulfur (lower pH)."
+  },
+  {
+    "topic": "nitrogen",
+    "text": "Nitrogen supports leaf growth and chlorophyll production. Deficiency causes yellowing of older leaves. Recommended for leafy crops in split doses. Sources: urea, ammonium sulfate, organic manure."
+  },
+  {
+    "topic": "phosphorus",
+    "text": "Phosphorus supports root development, energy transfer, and flowering. Low availability in alkaline soils. Apply near root zone for better uptake. Sources: DAP, SSP, rock phosphate."
+  },
+  {
+    "topic": "potassium",
+    "text": "Potassium regulates water movement, enzyme activation, and stress tolerance. Deficient plants show scorched leaf edges. Important for fruiting crops. Sources: MOP (muriate of potash), SOP."
+  },
+  {
+    "topic": "organic matter",
+    "text": "Compost, farmyard manure, and green manures improve soil structure, water retention, and nutrient cycling. Aim for 2-4% organic carbon content for healthy soil."
+  },
+  {
+    "topic": "soil moisture",
+    "text": "Soil moisture affects nutrient availability and root respiration. Optimal range varies by crop; most need 50-70% of field capacity. Monitor with tensiometers or soil moisture sensors."
+  },
+  {
+    "topic": "loamy soil",
+    "text": "Loamy soil is a balanced mix of sand, silt, and clay. Offers good drainage and water retention. Best for most crops including vegetables and cereals."
+  },
+  {
+    "topic": "clay soil",
+    "text": "Clay soils retain water and nutrients but drain slowly and compact easily. Improve with organic matter, gypsum, and raised beds."
+  },
+  {
+    "topic": "sandy soil",
+    "text": "Sandy soils drain quickly and hold fewer nutrients. Require frequent irrigation and organic matter addition for better fertility."
+  },
+  {
+    "topic": "soil testing",
+    "text": "Soil tests measure pH, electrical conductivity, organic carbon, and available N-P-K. Sample from 15 cm depth for accurate results. Test every 2-3 years."
+  },
+  {
+    "topic": "fertilizer safety",
+    "text": "Apply fertilizers based on soil test results, crop requirement, and growth stage. Avoid over-application which can cause nutrient burn or runoff."
+  },
+  {
+    "topic": "micronutrients",
+    "text": "Zinc, iron, boron, manganese, and copper are needed in small amounts. Deficiency symptoms appear on specific plant parts. Soil testing prevents toxicity."
+  },
+  {
+    "topic": "salinity",
+    "text": "Soil salinity restricts water uptake. Test electrical conductivity (EC). Manage with drainage, gypsum, and salt-tolerant crops like barley and cotton."
+  },
+  {
+    "topic": "waterlogging",
+    "text": "Waterlogging reduces oxygen to roots, causing yellowing and root rot. Improve with drainage, raised beds, and avoiding over-irrigation."
+  },
+  {
+    "topic": "rice",
+    "text": "Rice grows in warm, humid conditions with abundant water. Best soil pH is 5.5-6.5. Requires high nitrogen and potassium. Grown in kharif season."
+  },
+  {
+    "topic": "wheat",
+    "text": "Wheat is a cool-season crop. Ideal pH 6.0-7.5. Requires moderate nitrogen, good phosphorus for root development, and adequate potassium. Grown in rabi season."
+  },
+  {
+    "topic": "maize",
+    "text": "Maize needs warm temperatures, well-drained loamy soil, and pH 5.8-7.0. Heavy nitrogen feeder, especially during vegetative stage."
+  },
+  {
+    "topic": "pulses",
+    "text": "Pulses like chickpea and lentil fix nitrogen and improve soil health. Require less nitrogen but need phosphorus and potassium for pod formation."
+  },
+  {
+    "topic": "tomato",
+    "text": "Tomatoes need well-drained soil, pH 6.0-6.8, and consistent moisture. High potassium and calcium prevent blossom-end rot."
+  },
+  {
+    "topic": "potato",
+    "text": "Potatoes prefer loose, well-drained soil with pH 5.0-6.0. Requires high potassium for tuber development and moderate nitrogen."
+  },
+  {
+    "topic": "cotton",
+    "text": "Cotton grows best in black soil with pH 6.0-8.0. Requires moderate nitrogen, high potassium, and warm temperatures with adequate rainfall."
+  },
+  {
+    "topic": "sugarcane",
+    "text": "Sugarcane needs deep, well-drained loamy soil with pH 6.5-7.5. Heavy feeder requiring high nitrogen and potassium through the growth cycle."
+  },
+  {
+    "topic": "nitrogen deficiency",
+    "text": "Signs: pale green to yellow older leaves, stunted growth. Fix: apply urea or ammonium sulfate. Use 50 kg N/ha for most cereals."
+  },
+  {
+    "topic": "phosphorus deficiency",
+    "text": "Signs: dark green or purple leaves, poor root development, delayed flowering. Fix: apply DAP or SSP near root zone."
+  },
+  {
+    "topic": "potassium deficiency",
+    "text": "Signs: scorched or brown leaf edges, weak stems, poor fruit quality. Fix: apply MOP at 40-60 kg K2O/ha."
+  }
+]

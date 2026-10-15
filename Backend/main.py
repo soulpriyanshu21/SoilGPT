@@ -1,7 +1,20 @@
+"""
+SoilGPT Backend
+- GET /analyze?location=<pincode_or_city>       → live soil data + ICAR reference
+- POST /ask                                     → soil Q&A (RAG)
+- POST /recommend/crop                          → crop recommendation (ML)
+- POST /recommend/fertilizer                    → fertilizer recommendation (ML)
+"""
+
+import os
+import re
+import pickle
+import numpy as np
+import requests
+import torch
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-import requests
-import re
+from pydantic import BaseModel
 
 app = FastAPI(title="SoilGPT API")
 
@@ -12,167 +25,79 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
 # ============================================================
-# REGIONAL SOIL REFERENCE
+# AI MODELS — load once at startup
 # ============================================================
 
-SOIL_REFERENCE = {
-    "gujarat": {
-        "soil_type": "Deep Black Cotton Soil (Vertisols)",
-        "ph_range": "7.1–8.9",
-        "organic_carbon": "Low to medium (0.08%–0.86%)",
-        "nitrogen": "Low to medium (125–323 kg/ha)",
-        "phosphorus": "Medium to high (irrigated), low (rainfed)",
-        "potassium": "High to very high",
-        "deficiencies": "Zinc (Zn), Sulphur (S)",
-        "recommendation": "Add organic matter, compost and balanced NPK. Supplement zinc and sulphur when soil testing indicates a deficiency."
-    },
-    "maharashtra": {
-        "soil_type": "Black cotton soil and laterite (Konkan)",
-        "ph_range": "6.5–8.2",
-        "organic_carbon": "Low to medium (0.2%–0.75%)",
-        "nitrogen": "Low to medium",
-        "phosphorus": "Low to medium",
-        "potassium": "Medium to high",
-        "deficiencies": "Zinc, Boron, Iron in lateritic soils",
-        "recommendation": "Use organic compost, balanced fertilizer and micronutrients based on soil testing."
-    },
-    "punjab": {
-        "soil_type": "Alluvial soil (Indo-Gangetic plain)",
-        "ph_range": "7.5–8.5",
-        "organic_carbon": "Low (0.15%–0.5%)",
-        "nitrogen": "Medium",
-        "phosphorus": "Medium to high",
-        "potassium": "Medium",
-        "deficiencies": "Zinc, Iron, Manganese",
-        "recommendation": "Consider green manuring, zinc sulphate where indicated and appropriate irrigation management."
-    },
-    "haryana": {
-        "soil_type": "Alluvial soil (semi-arid)",
-        "ph_range": "7.5–8.5",
-        "organic_carbon": "Low",
-        "nitrogen": "Low to medium",
-        "phosphorus": "Medium",
-        "potassium": "Medium",
-        "deficiencies": "Zinc, Iron",
-        "recommendation": "Add organic matter and use balanced NPK. Apply micronutrients according to soil-test results."
-    },
-    "uttarakhand": {
-        "soil_type": "Brown forest soil and podzolic soil in hill regions",
-        "ph_range": "5.5–7.0",
-        "organic_carbon": "Medium to high (0.5%–1.5%)",
-        "nitrogen": "Medium to high",
-        "phosphorus": "Low to medium",
-        "potassium": "Medium",
-        "deficiencies": "Phosphorus, Boron",
-        "recommendation": "Use suitable organic matter and address acidity or nutrient deficiencies based on soil testing."
-    },
-    "uttar pradesh": {
-        "soil_type": "Alluvial soil (Gangetic plain)",
-        "ph_range": "7.0–8.5",
-        "organic_carbon": "Low to medium",
-        "nitrogen": "Low to medium",
-        "phosphorus": "Low to medium",
-        "potassium": "Medium",
-        "deficiencies": "Zinc, Sulphur",
-        "recommendation": "Consider green manuring, balanced NPK and regular soil testing."
-    },
-    "karnataka": {
-        "soil_type": "Red soil and black soil (Deccan)",
-        "ph_range": "6.0–8.0",
-        "organic_carbon": "Low to medium",
-        "nitrogen": "Low to medium",
-        "phosphorus": "Low to medium",
-        "potassium": "Medium to high",
-        "deficiencies": "Zinc, Boron",
-        "recommendation": "Use organic manure, crop rotation and micronutrients when indicated by soil testing."
-    },
-    "tamil nadu": {
-        "soil_type": "Red loam and coastal alluvial soil",
-        "ph_range": "6.5–8.5",
-        "organic_carbon": "Low to medium",
-        "nitrogen": "Low to medium",
-        "phosphorus": "Low to medium",
-        "potassium": "Medium to high",
-        "deficiencies": "Zinc, Iron",
-        "recommendation": "Use balanced fertilizer and organic matter, with micronutrients guided by soil testing."
-    },
-    "rajasthan": {
-        "soil_type": "Sandy and arid soil",
-        "ph_range": "7.5–9.0",
-        "organic_carbon": "Very low",
-        "nitrogen": "Low",
-        "phosphorus": "Low",
-        "potassium": "Medium to high",
-        "deficiencies": "Organic matter, Zinc, Iron",
-        "recommendation": "Improve organic matter and irrigation efficiency. Soil amendments should be based on testing."
-    },
-    "delhi": {
-        "soil_type": "Alluvial soil (Yamuna plain)",
-        "ph_range": "7.0–8.5",
-        "organic_carbon": "Low",
-        "nitrogen": "Low to medium",
-        "phosphorus": "Low to medium",
-        "potassium": "Medium",
-        "deficiencies": "Organic matter, Zinc",
-        "recommendation": "Add suitable compost and avoid excessive fertilizer. Conduct regular soil testing."
-    },
-    "west bengal": {
-        "soil_type": "Alluvial and deltaic soil",
-        "ph_range": "5.5–7.5",
-        "organic_carbon": "Medium",
-        "nitrogen": "Medium",
-        "phosphorus": "Low to medium",
-        "potassium": "Medium",
-        "deficiencies": "Zinc, Boron",
-        "recommendation": "Maintain organic matter and use balanced fertilizer according to soil-test results."
-    },
-    "kerala": {
-        "soil_type": "Laterite and coastal alluvial soil",
-        "ph_range": "5.0–6.5",
-        "organic_carbon": "Medium to high",
-        "nitrogen": "Medium",
-        "phosphorus": "Low",
-        "potassium": "Medium",
-        "deficiencies": "Phosphorus, Calcium, Magnesium",
-        "recommendation": "Check soil acidity and nutrient levels before applying lime or other amendments."
-    },
-    "default": {
-        "soil_type": "Mixed soil types; varies by region",
-        "ph_range": "6.0–8.0 (typical reference range)",
-        "organic_carbon": "Low to medium",
-        "nitrogen": "Low to medium",
-        "phosphorus": "Low to medium",
-        "potassium": "Medium",
-        "deficiencies": "Micronutrients such as Zn, B and Fe may be deficient",
-        "recommendation": "Conduct a laboratory soil test for location-specific nutrient and fertilizer recommendations."
-    }
-}
+print("[AI] Loading models...")
 
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
-def get_soil_reference(state: str):
-    if not state:
-        return SOIL_REFERENCE["default"]
+# ---- RAG index ----
+RAG_PATH = os.path.join(BASE_DIR, "rag_index.pt")
+if os.path.exists(RAG_PATH):
+    from sentence_transformers import SentenceTransformer
+    from transformers import pipeline
 
-    state_lower = state.lower().strip()
+    rag_data = torch.load(RAG_PATH, map_location="cpu")
+    rag_documents = rag_data["documents"]
+    rag_embeddings = rag_data["document_embeddings"]
+    rag_soil_knowledge = rag_data["soil_knowledge"]
 
-    for key, value in SOIL_REFERENCE.items():
-        if key != "default" and (
-            key in state_lower or state_lower in key
-        ):
-            return value
+    embedding_model = SentenceTransformer(
+        "sentence-transformers/all-MiniLM-L6-v2",
+        device="cpu"
+    )
+    answer_generator = pipeline(
+        "text2text-generation",
+        model="google/flan-t5-base",
+        device=-1,
+        max_new_tokens=200,
+    )
+    RAG_READY = True
+    print(f"[AI] RAG loaded — {len(rag_documents)} documents indexed")
+else:
+    RAG_READY = False
+    print(f"[AI] WARNING: {RAG_PATH} not found — /ask will fail")
 
-    return SOIL_REFERENCE["default"]
+# ---- Crop model ----
+CROP_PATH = os.path.join(BASE_DIR, "crop_model.pkl")
+if os.path.exists(CROP_PATH):
+    with open(CROP_PATH, "rb") as f:
+        crop_data = pickle.load(f)
+        crop_model = crop_data["model"]
+        crop_label_encoder = crop_data["label_encoder"]
+    CROP_READY = True
+    print("[AI] Crop model loaded")
+else:
+    CROP_READY = False
+    print(f"[AI] WARNING: {CROP_PATH} not found — /recommend/crop will fail")
+
+# ---- Fertilizer model ----
+FERT_PATH = os.path.join(BASE_DIR, "fert_model.pkl")
+if os.path.exists(FERT_PATH):
+    with open(FERT_PATH, "rb") as f:
+        fert_data = pickle.load(f)
+        fert_model = fert_data["model"]
+        fert_label_encoder = fert_data["label_encoder"]
+    FERT_READY = True
+    print("[AI] Fertilizer model loaded")
+else:
+    FERT_READY = False
+    print(f"[AI] WARNING: {FERT_PATH} not found — /recommend/fertilizer will fail")
+
+print("[AI] Startup complete")
 
 
 # ============================================================
-# GEOCODING: OPEN-METEO
+# GEOCODING
 # ============================================================
 
 def geocode_openmeteo(place: str):
+    """Use Open-Meteo geocoding (free, no key)."""
     try:
         url = "https://geocoding-api.open-meteo.com/v1/search"
-
         params = {
             "name": place,
             "count": 1,
@@ -180,275 +105,276 @@ def geocode_openmeteo(place: str):
             "format": "json",
             "countryCode": "IN",
         }
+        r = requests.get(url, params=params, timeout=8)
+        if r.status_code == 200:
+            data = r.json()
+            results = data.get("results", [])
+            if results:
+                res = results[0]
+                name = res.get("name", "")
+                admin1 = res.get("admin1", "")
+                location = f"{name}, {admin1}" if admin1 else name
+                return {
+                    "lat": float(res["latitude"]),
+                    "lon": float(res["longitude"]),
+                    "location": location,
+                    "pincode": None,
+                }
+    except Exception as e:
+        print(f"[Open-Meteo geocode] {e}")
+    return None
 
-        response = requests.get(url, params=params, timeout=10)
-        response.raise_for_status()
-
-        results = response.json().get("results", [])
-
-        if not results:
-            return None
-
-        result = results[0]
-        name = result.get("name", "")
-        state = result.get("admin1", "")
-
-        location = ", ".join(
-            part for part in [name, state] if part and part != name
-        )
-
-        if not location:
-            location = name
-
-        return {
-            "lat": float(result["latitude"]),
-            "lon": float(result["longitude"]),
-            "location": location,
-            "pincode": None,
-        }
-
-    except Exception as error:
-        print(f"[Open-Meteo geocoding] {error}")
-        return None
-
-
-# ============================================================
-# GEOCODING: INDIAN PIN CODES
-# ============================================================
 
 def geocode_pincode(pincode: str):
-    post_office_name = ""
-    district_name = ""
-    state_name = ""
-
-    # First: retrieve post office, district and state.
-    try:
-        response = requests.get(
-            f"https://api.postalpincode.in/pincode/{pincode}",
-            timeout=8,
-        )
-        response.raise_for_status()
-
-        data = response.json()
-
-        if data and data[0].get("Status") == "Success":
-            offices = data[0].get("PostOffice") or []
-
-            if offices:
-                office = offices[0]
-                post_office_name = (office.get("Name") or "").strip()
-                district_name = (office.get("District") or "").strip()
-                state_name = (office.get("State") or "").strip()
-
-    except Exception as error:
-        print(f"[Postal lookup] {error}")
-
-    # Second: retrieve approximate coordinates.
-    latitude = None
-    longitude = None
-    zippo_name = ""
+    """Multi-layer PIN code lookup."""
+    district = None
+    state = None
 
     try:
-        response = requests.get(
-            f"https://api.zippopotam.us/in/{pincode}",
-            timeout=8,
+        r = requests.get(
+            f"https://api.postalpincode.in/pincode/{pincode}", timeout=8
         )
+        if r.status_code == 200:
+            data = r.json()
+            if data and data[0].get("Status") == "Success":
+                po = data[0].get("PostOffice", [])
+                if po:
+                    district = (po[0].get("District") or "").strip()
+                    state = (po[0].get("State") or "").strip()
+    except Exception as e:
+        print(f"[postalpincode] {e}")
 
-        if response.status_code == 200:
-            data = response.json()
-            places = data.get("places", [])
+    lat = lon = None
+    try:
+        r = requests.get(f"https://api.zippopotam.us/in/{pincode}", timeout=8)
+        if r.status_code == 200:
+            place = r.json()["places"][0]
+            lat = float(place["latitude"])
+            lon = float(place["longitude"])
+    except Exception as e:
+        print(f"[Zippopotam] {e}")
 
-            if places:
-                place = places[0]
-                latitude = float(place["latitude"])
-                longitude = float(place["longitude"])
-                zippo_name = place.get("place name", "")
-
-                if not state_name:
-                    state_name = place.get("state", "")
-
-    except Exception as error:
-        print(f"[Zippopotam lookup] {error}")
-
-    # Third: use the district's coordinates if necessary.
-    if latitude is None and district_name:
-        geo = geocode_openmeteo(district_name)
-
+    if lat is None and district:
+        geo = geocode_openmeteo(district)
         if geo:
-            latitude = geo["lat"]
-            longitude = geo["lon"]
+            lat = geo["lat"]
+            lon = geo["lon"]
 
-    if latitude is None or longitude is None:
-        geo = geocode_openmeteo(pincode)
-
-        if geo:
-            latitude = geo["lat"]
-            longitude = geo["lon"]
-
-    if latitude is None or longitude is None:
+    if lat is None or lon is None:
         return None
 
-    # Prefer the post office name when available.
-    if post_office_name and district_name and state_name:
-        location_name = (
-            f"{post_office_name}, {district_name}, {state_name}"
-        )
-    elif post_office_name and state_name:
-        location_name = f"{post_office_name}, {state_name}"
-    elif district_name and state_name:
-        location_name = f"{district_name}, {state_name}"
-    elif zippo_name and state_name:
-        location_name = f"{zippo_name}, {state_name}"
-    elif zippo_name:
-        location_name = zippo_name
+    if district and state:
+        location = f"{district}, {state}"
+    elif district:
+        location = district
     else:
-        location_name = f"PIN {pincode}"
+        location = f"PIN {pincode}"
 
     return {
-        "lat": latitude,
-        "lon": longitude,
-        "location": location_name,
+        "lat": lat,
+        "lon": lon,
+        "location": location,
         "pincode": pincode,
     }
 
 
-# ============================================================
-# GEOCODING: NOMINATIM FALLBACK
-# ============================================================
-
-def geocode_nominatim(place: str):
-    try:
-        response = requests.get(
-            "https://nominatim.openstreetmap.org/search",
-            params={
-                "q": place,
-                "format": "json",
-                "limit": 1,
-                "countrycodes": "in",
-            },
-            headers={
-                "User-Agent": "SoilGPT/1.0 (educational project)"
-            },
-            timeout=10,
-        )
-
-        response.raise_for_status()
-        results = response.json()
-
-        if not results:
-            return None
-
-        result = results[0]
-        parts = [
-            part.strip()
-            for part in result["display_name"].split(",")
-        ]
-
-        location_name = ", ".join(parts[:2])
-
-        return {
-            "lat": float(result["lat"]),
-            "lon": float(result["lon"]),
-            "location": location_name,
-            "pincode": None,
-        }
-
-    except Exception as error:
-        print(f"[Nominatim geocoding] {error}")
-        return None
-
-
-# ============================================================
-# MASTER GEOCODING FUNCTION
-# ============================================================
-
 def geocode(location: str):
+    """Master geocoder."""
     location = location.strip()
-
     if re.fullmatch(r"\d{6}", location):
         result = geocode_pincode(location)
-
         if result:
             return result
-
-    result = geocode_openmeteo(location)
-
-    if result:
-        return result
-
-    return geocode_nominatim(location)
+    return geocode_openmeteo(location)
 
 
 # ============================================================
-# LIVE SOIL DATA: OPEN-METEO
+# LIVE SOIL DATA (Open-Meteo)
 # ============================================================
 
-def fetch_openmeteo_soil(latitude: float, longitude: float):
+def fetch_live_soil(lat: float, lon: float):
+    url = "https://api.open-meteo.com/v1/forecast"
+    params = {
+        "latitude": lat,
+        "longitude": lon,
+        "hourly": "soil_moisture_0_to_1cm,soil_temperature_0cm,soil_temperature_6cm",
+        "forecast_days": 1,
+        "timezone": "auto",
+    }
     try:
-        response = requests.get(
-            "https://api.open-meteo.com/v1/forecast",
-            params={
-                "latitude": latitude,
-                "longitude": longitude,
-                "hourly": (
-                    "soil_moisture_0_to_1cm,"
-                    "soil_moisture_1_to_3cm,"
-                    "soil_temperature_0cm,"
-                    "soil_temperature_6cm"
-                ),
-                "forecast_days": 1,
-                "timezone": "auto",
-            },
-            timeout=15,
-        )
+        r = requests.get(url, params=params, timeout=10)
+        if r.status_code == 200:
+            hourly = r.json().get("hourly", {})
 
-        response.raise_for_status()
-        return response.json()
+            def last(key):
+                vals = hourly.get(key, [])
+                for v in reversed(vals):
+                    if v is not None:
+                        return v
+                return None
 
-    except Exception as error:
-        print(f"[Open-Meteo soil data] {error}")
-        return None
-
-
-def parse_openmeteo_soil(raw):
-    output = {}
-
-    if not raw or "hourly" not in raw:
-        return output
-
-    hourly = raw["hourly"]
-    times = hourly.get("time", [])
-
-    def last_valid(key):
-        values = hourly.get(key, [])
-
-        for value in reversed(values):
-            if value is not None:
-                return value
-
-        return None
-
-    output["soil_moisture_0_1cm"] = last_valid(
-        "soil_moisture_0_to_1cm"
-    )
-    output["soil_moisture_1_3cm"] = last_valid(
-        "soil_moisture_1_to_3cm"
-    )
-    output["soil_temperature_0cm"] = last_valid(
-        "soil_temperature_0cm"
-    )
-    output["soil_temperature_6cm"] = last_valid(
-        "soil_temperature_6cm"
-    )
-
-    if times:
-        output["reading_time"] = times[-1]
-
-    return output
+            return {
+                "soil_moisture": last("soil_moisture_0_to_1cm"),
+                "soil_temp_0cm": last("soil_temperature_0cm"),
+                "soil_temp_6cm": last("soil_temperature_6cm"),
+            }
+    except Exception as e:
+        print(f"[Open-Meteo soil] {e}")
+    return {}
 
 
 # ============================================================
-# API ENDPOINTS
+# REGIONAL SOIL REFERENCE (ICAR)
+# ============================================================
+
+REFERENCE = {
+    "gujarat": {
+        "soil_type": "Deep Black Cotton Soil (Vertisols)",
+        "ph_range": "7.1 – 8.9",
+        "nitrogen": "Low to medium",
+        "phosphorus": "Medium (irrigated), Low (rainfed)",
+        "potassium": "High to very high",
+        "deficiencies": "Zinc, Sulphur",
+        "recommendation": "Add organic matter. Supplement Zinc & Sulphur.",
+    },
+    "maharashtra": {
+        "soil_type": "Black cotton + Laterite",
+        "ph_range": "6.5 – 8.2",
+        "nitrogen": "Low to medium",
+        "phosphorus": "Low to medium",
+        "potassium": "Medium to high",
+        "deficiencies": "Zinc, Boron, Iron",
+        "recommendation": "Use organic compost. Foliar micronutrient spray.",
+    },
+    "punjab": {
+        "soil_type": "Alluvial soil",
+        "ph_range": "7.5 – 8.5",
+        "nitrogen": "Medium",
+        "phosphorus": "Medium to high",
+        "potassium": "Medium",
+        "deficiencies": "Zinc, Iron, Manganese",
+        "recommendation": "Green manuring. Add Zinc sulphate.",
+    },
+    "uttarakhand": {
+        "soil_type": "Brown forest soil",
+        "ph_range": "5.5 – 7.0",
+        "nitrogen": "Medium to high",
+        "phosphorus": "Low to medium",
+        "potassium": "Medium",
+        "deficiencies": "Phosphorus, Boron",
+        "recommendation": "Add lime if acidic. Supplement phosphorus.",
+    },
+    "uttar pradesh": {
+        "soil_type": "Alluvial soil",
+        "ph_range": "7.0 – 8.5",
+        "nitrogen": "Low to medium",
+        "phosphorus": "Low to medium",
+        "potassium": "Medium",
+        "deficiencies": "Zinc, Sulphur",
+        "recommendation": "Green manuring. Balanced NPK.",
+    },
+    "karnataka": {
+        "soil_type": "Red + Black soil",
+        "ph_range": "6.0 – 8.0",
+        "nitrogen": "Low to medium",
+        "phosphorus": "Low to medium",
+        "potassium": "Medium to high",
+        "deficiencies": "Zinc, Boron",
+        "recommendation": "Add organic manure. Crop rotation.",
+    },
+    "tamil nadu": {
+        "soil_type": "Red loam + Coastal alluvial",
+        "ph_range": "6.5 – 8.5",
+        "nitrogen": "Low to medium",
+        "phosphorus": "Low to medium",
+        "potassium": "Medium to high",
+        "deficiencies": "Zinc, Iron",
+        "recommendation": "Balanced fertilizer. Green manure.",
+    },
+    "delhi": {
+        "soil_type": "Alluvial soil",
+        "ph_range": "7.0 – 8.5",
+        "nitrogen": "Low to medium",
+        "phosphorus": "Low to medium",
+        "potassium": "Medium",
+        "deficiencies": "Organic matter, Zinc",
+        "recommendation": "Compost heavily. Regular soil testing.",
+    },
+    "rajasthan": {
+        "soil_type": "Sandy + Arid soil",
+        "ph_range": "7.5 – 9.0",
+        "nitrogen": "Low",
+        "phosphorus": "Low",
+        "potassium": "Medium to high",
+        "deficiencies": "Organic matter, Zinc",
+        "recommendation": "Heavy organic matter. Drip irrigation.",
+    },
+    "west bengal": {
+        "soil_type": "Alluvial + Deltaic",
+        "ph_range": "5.5 – 7.5",
+        "nitrogen": "Medium",
+        "phosphorus": "Low to medium",
+        "potassium": "Medium",
+        "deficiencies": "Zinc, Boron",
+        "recommendation": "Balanced fertilizer. Organic matter.",
+    },
+    "kerala": {
+        "soil_type": "Laterite + Coastal",
+        "ph_range": "5.0 – 6.5",
+        "nitrogen": "Medium",
+        "phosphorus": "Low",
+        "potassium": "Medium",
+        "deficiencies": "Phosphorus, Calcium, Magnesium",
+        "recommendation": "Apply lime. Rock phosphate for P.",
+    },
+    "default": {
+        "soil_type": "Mixed — varies by region",
+        "ph_range": "6.0 – 8.0",
+        "nitrogen": "Low to medium",
+        "phosphorus": "Low to medium",
+        "potassium": "Medium",
+        "deficiencies": "Micronutrients (Zn, B, Fe)",
+        "recommendation": "Soil test for precise recommendations.",
+    },
+}
+
+
+def get_reference(state: str):
+    if not state:
+        return REFERENCE["default"]
+    state_lower = state.lower().strip()
+    for key in REFERENCE:
+        if key in state_lower or state_lower in key:
+            return REFERENCE[key]
+    return REFERENCE["default"]
+
+
+# ============================================================
+# REQUEST MODELS
+# ============================================================
+
+class SoilQuestion(BaseModel):
+    question: str
+
+
+class CropRequest(BaseModel):
+    n: float
+    p: float
+    k: float
+    temperature: float
+    humidity: float
+    ph: float
+    rainfall: float
+
+
+class FertilizerRequest(BaseModel):
+    n_level: int
+    p_level: int
+    k_level: int
+
+
+# ============================================================
+# ENDPOINTS
 # ============================================================
 
 @app.get("/")
@@ -456,51 +382,24 @@ def root():
     return {
         "status": "ok",
         "service": "SoilGPT API",
+        "rag_ready": RAG_READY,
+        "crop_ready": CROP_READY,
+        "fert_ready": FERT_READY,
     }
 
 
-# Use this endpoint to get a location name without soil analysis.
-@app.get("/geocode")
-def geocode_endpoint(
-    location: str = Query(..., min_length=2)
-):
-    geo = geocode(location)
-
-    if not geo:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Could not find location: {location}",
-        )
-
-    return {
-        "location": geo["location"],
-        "pincode": geo["pincode"],
-        "lat": geo["lat"],
-        "lon": geo["lon"],
-    }
-
-
-# Main soil analysis endpoint.
 @app.get("/analyze")
 def analyze(location: str = Query(..., min_length=2)):
     geo = geocode(location)
-
     if not geo:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Could not find location: {location}",
-        )
+        raise HTTPException(404, f"Could not find location: {location}")
 
-    raw = fetch_openmeteo_soil(geo["lat"], geo["lon"])
-    live = parse_openmeteo_soil(raw) if raw else {}
+    live = fetch_live_soil(geo["lat"], geo["lon"])
 
-    # Extract the state from the returned location.
     state = ""
-
     if geo["location"] and "," in geo["location"]:
         state = geo["location"].split(",")[-1].strip()
-
-    reference = get_soil_reference(state)
+    reference = get_reference(state)
 
     return {
         "location": geo["location"],
@@ -512,15 +411,68 @@ def analyze(location: str = Query(..., min_length=2)):
     }
 
 
+@app.post("/ask")
+def ask_soil(q: SoilQuestion):
+    if not RAG_READY:
+        raise HTTPException(503, "RAG model not loaded on server")
+
+    q_emb = embedding_model.encode(
+        q.question, convert_to_tensor=True, normalize_embeddings=True
+    )
+    scores = rag_embeddings @ q_emb
+    top_idx = torch.topk(scores, k=3).indices.tolist()
+
+    context = "\n".join([rag_documents[i] for i in top_idx])
+    sources = [rag_soil_knowledge[i]["topic"] for i in top_idx]
+
+    prompt = (
+        f"Answer the soil question using the context.\n\n"
+        f"Context:\n{context}\n\n"
+        f"Question: {q.question}\n"
+        f"Answer:"
+    )
+    result = answer_generator(prompt)
+    answer = result[0]["generated_text"].strip()
+
+    return {"answer": answer, "sources": sources}
+
+
+@app.post("/recommend/crop")
+def recommend_crop_endpoint(req: CropRequest):
+    if not CROP_READY:
+        raise HTTPException(503, "Crop model not loaded on server")
+
+    features = np.array(
+        [[req.n, req.p, req.k, req.temperature, req.humidity, req.ph, req.rainfall]]
+    )
+    probs = crop_model.predict_proba(features)[0]
+    top_idx = np.argsort(probs)[::-1][:3]
+
+    crops = [
+        {
+            "crop": crop_label_encoder.inverse_transform([i])[0],
+            "confidence": round(float(probs[i]), 4),
+        }
+        for i in top_idx
+    ]
+    return {"recommended_crops": crops}
+
+
+@app.post("/recommend/fertilizer")
+def recommend_fertilizer_endpoint(req: FertilizerRequest):
+    if not FERT_READY:
+        raise HTTPException(503, "Fertilizer model not loaded on server")
+
+    features = np.array([[req.n_level, req.p_level, req.k_level]])
+    prediction = fert_model.predict(features)[0]
+    fertilizer = fert_label_encoder.inverse_transform([prediction])[0]
+    return {"recommended_fertilizer": fertilizer}
+
+
 # ============================================================
-# START SERVER
+# RUN
 # ============================================================
 
 if __name__ == "__main__":
     import uvicorn
-
-    uvicorn.run(
-        app,
-        host="0.0.0.0",
-        port=8000,
-    )
+    uvicorn.run(app, host="0.0.0.0", port=8000)

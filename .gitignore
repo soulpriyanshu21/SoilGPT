@@ -8,19 +8,21 @@ __pycache__/
 *.pyd
 *.egg-info/
 .pytest_cache/
-
-# OS
-.DS_Store
-Thumbs.db
+*.log
 
 # IDE
 .vscode/
 .idea/
 *.swp
 
-# Logs
-*.log
+# OS
+.DS_Store
+Thumbs.db
 
 # Environment
 .env
 .env.local
+
+# Test files
+test_*.json
+server_log.txt
